@@ -1,449 +1,185 @@
-#!/usr/bin/env python
-# coding: utf-8
 
-# ![image.png](attachment:image.png)
+# Imports
+import pandas            as pd
+import streamlit         as st
+import numpy             as np
+
+from datetime            import datetime
+from PIL                 import Image
+from io                  import BytesIO
+
+@st.cache
+def convert_df(df):
+    return df.to_csv(index=False).encode('utf-8')
+
+# Função para converter o df para excel
+@st.cache
+def to_excel(df):
+    output = BytesIO()
+    writer = pd.ExcelWriter(output, engine='xlsxwriter')
+    df.to_excel(writer, index=False, sheet_name='Sheet1')
+    writer.save()
+    processed_data = output.getvalue()
+    return processed_data
+
+
+### Criando os segmentos
+def recencia_class(x, r, q_dict):
+    """Classifica como melhor o menor quartil 
+       x = valor da linha,
+       r = recencia,
+       q_dict = quartil dicionario   
+    """
+    if x <= q_dict[r][0.25]:
+        return 'A'
+    elif x <= q_dict[r][0.50]:
+        return 'B'
+    elif x <= q_dict[r][0.75]:
+        return 'C'
+    else:
+        return 'D'
+
+def freq_val_class(x, fv, q_dict):
+    """Classifica como melhor o maior quartil 
+       x = valor da linha,
+       fv = frequencia ou valor,
+       q_dict = quartil dicionario   
+    """
+    if x <= q_dict[fv][0.25]:
+        return 'D'
+    elif x <= q_dict[fv][0.50]:
+        return 'C'
+    elif x <= q_dict[fv][0.75]:
+        return 'B'
+    else:
+        return 'A'
+
+# Função principal da aplicação
+def main():
+    # Configuração inicial da página da aplicação
+    st.set_page_config(page_title = 'RFV', \
+        layout="wide",
+        initial_sidebar_state='expanded'
+    )
+
+    # Título principal da aplicação
+    st.write("""# RFV
+
+    RFV significa recência, frequência, valor e é utilizado para segmentação de clientes baseado no comportamento 
+    de compras dos clientes e agrupa eles em clusters parecidos. Utilizando esse tipo de agrupamento podemos realizar 
+    ações de marketing e CRM melhores direcionadas, ajudando assim na personalização do conteúdo e até a retenção de clientes.
+
+    Para cada cliente é preciso calcular cada uma das componentes abaixo:
+
+    - Recência (R): Quantidade de dias desde a última compra.
+    - Frequência (F): Quantidade total de compras no período.
+    - Valor (V): Total de dinheiro gasto nas compras do período.
+
+    E é isso que iremos fazer abaixo.
+    """)
+    st.markdown("---")
+    
+    # Apresenta a imagem na barra lateral da aplicação
+    # image = Image.open("Bank-Branding.jpg")
+    # st.sidebar.image(image)
+
+    # Botão para carregar arquivo na aplicação
+    st.sidebar.write("## Suba o arquivo")
+    data_file_1 = st.sidebar.file_uploader("Bank marketing data", type = ['csv','xlsx'])
+
+    # Verifica se há conteúdo carregado na aplicação
+    if (data_file_1 is not None):
+        df_compras = pd.read_csv(data_file_1, infer_datetime_format=True, parse_dates=['DiaCompra'])
+
+        st.write('## Recência (R)')
+
+        
+        dia_atual = df_compras['DiaCompra'].max()
+        st.write('Dia máximo na base de dados: ', dia_atual)
+
+        st.write('Quantos dias faz que o cliente fez a sua última compra?')
+
+        df_recencia = df_compras.groupby(by='ID_cliente', as_index=False)['DiaCompra'].max()
+        df_recencia.columns = ['ID_cliente','DiaUltimaCompra']
+        df_recencia['Recencia'] = df_recencia['DiaUltimaCompra'].apply(lambda x: (dia_atual - x).days)
+        st.write(df_recencia.head())
 
-# # Tarefa - Agrupamento hierárquico
+        df_recencia.drop('DiaUltimaCompra', axis=1, inplace=True)
 
-# Neste exercício vamos usar a base [online shoppers purchase intention](https://archive.ics.uci.edu/ml/datasets/Online+Shoppers+Purchasing+Intention+Dataset) de Sakar, C.O., Polat, S.O., Katircioglu, M. et al. Neural Comput & Applic (2018). [Web Link](https://doi.org/10.1007/s00521-018-3523-0).
-# 
-# A base trata de registros de 12.330 sessões de acesso a páginas, cada sessão sendo de um único usuário em um período de 12 meses, para posteriormente estudarmos a relação entre o design da página e o perfil do cliente - "Será que clientes com comportamento de navegação diferentes possuem propensão a compra diferente?" 
-# 
-# Nosso objetivo agora é agrupar as sessões de acesso ao portal considerando o comportamento de acesso e informações da data, como a proximidade a uma data especial, fim de semana e o mês.
+        st.write('## Frequência (F)')
+        st.write('Quantas vezes cada cliente comprou com a gente?')
+        df_frequencia = df_compras[['ID_cliente','CodigoCompra']].groupby('ID_cliente').count().reset_index()
+        df_frequencia.columns = ['ID_cliente','Frequencia']
+        st.write(df_frequencia.head())
 
-# |Variavel                |Descrição          | 
-# |------------------------|:-------------------| 
-# |Administrative          | Quantidade de acessos em páginas administrativas| 
-# |Administrative_Duration | Tempo de acesso em páginas administrativas | 
-# |Informational           | Quantidade de acessos em páginas informativas  | 
-# |Informational_Duration  | Tempo de acesso em páginas informativas  | 
-# |ProductRelated          | Quantidade de acessos em páginas de produtos | 
-# |ProductRelated_Duration | Tempo de acesso em páginas de produtos | 
-# |BounceRates             | *Percentual de visitantes que entram no site e saem sem acionar outros *requests* durante a sessão  | 
-# |ExitRates               | * Soma de vezes que a página é visualizada por último em uma sessão dividido pelo total de visualizações | 
-# |PageValues              | * Representa o valor médio de uma página da Web que um usuário visitou antes de concluir uma transação de comércio eletrônico | 
-# |SpecialDay              | Indica a proximidade a uma data festiva (dia das mães etc) | 
-# |Month                   | Mês  | 
-# |OperatingSystems        | Sistema operacional do visitante | 
-# |Browser                 | Browser do visitante | 
-# |Region                  | Região | 
-# |TrafficType             | Tipo de tráfego                  | 
-# |VisitorType             | Tipo de visitante: novo ou recorrente | 
-# |Weekend                 | Indica final de semana | 
-# |Revenue                 | Indica se houve compra ou não |
-# 
-# \* variávels calculadas pelo google analytics
+        st.write('## Valor (V)')
+        st.write('Quanto que cada cliente gastou no periodo?')
+        df_valor = df_compras[['ID_cliente','ValorTotal']].groupby('ID_cliente').sum().reset_index()
+        df_valor.columns = ['ID_cliente','Valor']
+        st.write(df_valor.head())
+        
 
-# In[29]:
+        st.write('## Tabela RFV final')
+        df_RF = df_recencia.merge(df_frequencia, on='ID_cliente')
+        df_RFV = df_RF.merge(df_valor, on='ID_cliente')
+        df_RFV.set_index('ID_cliente', inplace=True)
+        st.write(df_RFV.head())
 
+        st.write('## Segmentação utilizando o RFV')
+        st.write("Um jeito de segmentar os clientes é criando quartis para cada componente do RFV, sendo que o melhor quartil é chamado de 'A', o segundo melhor quartil de 'B', o terceiro melhor de 'C' e o pior de 'D'. O melhor e o pior depende da componente. Po exemplo, quanto menor a recência melhor é o cliente (pois ele comprou com a gente tem pouco tempo) logo o menor quartil seria classificado como 'A', já pra componente frêquencia a lógica se inverte, ou seja, quanto maior a frêquencia do cliente comprar com a gente, melhor ele/a é, logo, o maior quartil recebe a letra 'A'.")
+        st.write('Se a gente tiver interessado em mais ou menos classes, basta a gente aumentar ou diminuir o número de quantils pra cada componente.')
 
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
+        st.write('Quartis para o RFV')
+        quartis = df_RFV.quantile(q=[0.25,0.5,0.75])
+        st.write(quartis)
 
-from scipy.cluster.hierarchy import linkage, fcluster, dendrogram
-from gower import gower_matrix
-from sklearn.preprocessing import StandardScaler
-from scipy.spatial.distance import pdist, squareform
+        st.write('Tabela após a criação dos grupos')
+        df_RFV['R_quartil'] = df_RFV['Recencia'].apply(recencia_class,
+                                                        args=('Recencia', quartis))
+        df_RFV['F_quartil'] = df_RFV['Frequencia'].apply(freq_val_class,
+                                                        args=('Frequencia', quartis))
+        df_RFV['V_quartil'] = df_RFV['Valor'].apply(freq_val_class,
+                                                    args=('Valor', quartis))
+        df_RFV['RFV_Score'] = (df_RFV.R_quartil 
+                            + df_RFV.F_quartil 
+                            + df_RFV.V_quartil)
+        st.write(df_RFV.head())
 
+        st.write('Quantidade de clientes por grupos')
+        st.write(df_RFV['RFV_Score'].value_counts())
 
-# In[30]:
+        st.write('#### Clientes com menor recência, maior frequência e maior valor gasto')
+        st.write(df_RFV[df_RFV['RFV_Score']=='AAA'].sort_values('Valor', ascending=False).head(10))
 
+        st.write('### Ações de marketing/CRM')
 
-df = pd.read_csv('online_shoppers_intention.csv')
+        dict_acoes = {'AAA': 'Enviar cupons de desconto, Pedir para indicar nosso produto pra algum amigo, Ao lançar um novo produto enviar amostras grátis pra esses.',
+        'DDD': 'Churn! clientes que gastaram bem pouco e fizeram poucas compras, fazer nada',
+        'DAA': 'Churn! clientes que gastaram bastante e fizeram muitas compras, enviar cupons de desconto para tentar recuperar',
+        'CAA': 'Churn! clientes que gastaram bastante e fizeram muitas compras, enviar cupons de desconto para tentar recuperar'
+        }
 
+        df_RFV['acoes de marketing/crm'] = df_RFV['RFV_Score'].map(dict_acoes)
+        st.write(df_RFV.head())
 
-# In[31]:
 
+        # df_RFV.to_excel('./auxiliar/output/RFV_.xlsx')
+        df_xlsx = to_excel(df_RFV)
+        st.download_button(label='📥 Download',
+                            data=df_xlsx ,
+                            file_name= 'RFV_.xlsx')
 
-df.head()
+        st.write('Quantidade de clientes por tipo de ação')
+        st.write(df_RFV['acoes de marketing/crm'].value_counts(dropna=False))
 
+if __name__ == '__main__':
+	main()
+    
 
-# In[32]:
 
 
-df.Revenue.value_counts(dropna=False)
 
 
-# ## Análise descritiva
-# 
-# Faça uma análise descritiva das variáveis do escopo.
-# 
-# - Verifique a distribuição dessas variáveis
-# - Veja se há valores *missing* e caso haja, decida o que fazer
-# - Faça mais algum tratamento nas variáveis caso ache pertinente
-
-# In[33]:
-
-
-df.info()
-
-
-# In[34]:
-
-
-df.nunique(axis=0)
-
-
-# In[35]:
-
-
-df['SpecialDay'].unique()
-
-
-# In[36]:
-
-
-df['SpecialDay'].value_counts()
-
-
-# In[37]:
-
-
-df['Month'].unique()
-
-
-# In[38]:
-
-
-df['Month'].value_counts()
-
-
-# In[39]:
-
-
-df['Weekend'].value_counts()
-
-
-# In[40]:
-
-
-fig, axis = plt.subplots(4, 2, figsize=(20,20))
-
-sns.histplot(data=df, x = "Administrative", discrete=True, ax=axis[0,0])
-axis[0, 0].set_title("Administrative Count")
-
-sns.histplot(data=df, x = "Administrative_Duration", ax=axis[0,1])
-axis[0, 1].set_title("Administrative_Duration Count")
-
-sns.histplot(data=df, x = "Informational", discrete=True, ax=axis[1,0])
-axis[1, 0].set_title("Informational Count")
-
-sns.histplot(data=df, x = "Informational_Duration", bins=50, ax=axis[1,1])
-axis[1, 1].set_title("Informational_Duration Count")
-
-sns.histplot(data=df, x = "ProductRelated", discrete=True, ax=axis[2,0])
-axis[2, 0].set_title("ProductRelated Count")
-
-sns.histplot(data=df, x = "ProductRelated_Duration", ax=axis[2,1])
-axis[2, 1].set_title("ProductRelated_Duration Count")
-
-sns.histplot(data=df, x = "SpecialDay", ax=axis[3,0])
-axis[3, 0].set_title("SpecialDay Count")
-
-sns.histplot(data=df, x = "Month", ax=axis[3,1])
-axis[3, 1].set_title("Month Count")
-
-
-# In[41]:
-
-
-sns.countplot(data=df, x = 'Weekend').set_title("Weekend Count")
-
-
-# In[ ]:
-
-
-
-
-
-# ## Variáveis de agrupamento
-# 
-# Liste as variáveis que você vai querer utilizar. Essa é uma atividade importante do projeto, e tipicamente não a recebemos pronta. Não há resposta pronta ou correta, mas apenas critérios e a sua decisão. Os critérios são os seguintes:
-# 
-# - Selecione para o agrupamento variáveis que descrevam o padrão de navegação na sessão.
-# - Selecione variáveis que indiquem a característica da data.
-# - Não se esqueça de que você vai precisar realizar um tratamento especial para variáveis qualitativas.
-# - Trate adequadamente valores faltantes.
-
-# In[42]:
-
-
-variaveis = ['Administrative', 'Administrative_Duration', 'Informational', 
-             'Informational_Duration', 'ProductRelated', 'ProductRelated_Duration', 
-             'SpecialDay', 'Month', 'Weekend']
-variaveis_qtd = ['Administrative', 'Administrative_Duration', 'Informational', 
-             'Informational_Duration', 'ProductRelated', 'ProductRelated_Duration']
-variaveis_cat = ['SpecialDay', 'Month', 'Weekend']
-
-
-# In[43]:
-
-
-df_pad = pd.DataFrame(StandardScaler().fit_transform(df[variaveis_qtd]), columns = df[variaveis_qtd].columns)
-
-
-# In[44]:
-
-
-df_pad.head()
-
-
-# In[45]:
-
-
-df_pad[variaveis_cat] = df[variaveis_cat]
-
-
-# In[46]:
-
-
-df2 = pd.get_dummies(df_pad[variaveis].dropna(), columns=variaveis_cat)
-df2.head()
-
-
-# In[47]:
-
-
-df2.columns.values
-
-
-# ## Número de grupos
-# 
-# Nesta atividade vamos adotar uma abordagem bem pragmática e avaliar agrupamentos hierárquicos com 3 e 4 grupos, por estarem bem alinhados com uma expectativa e estratégia do diretor da empresa. 
-# 
-# *Atenção*: Cuidado se quiser fazer o dendrograma, pois com muitas observações ele pode ser mais complicado de fazer, e dependendo de como for o comando, ele pode travar o *kernell* do seu python.
-
-# In[48]:
-
-
-vars_cat = [True if x in {'SpecialDay_0.0', 'SpecialDay_0.2',
-       'SpecialDay_0.4', 'SpecialDay_0.6', 'SpecialDay_0.8',
-       'SpecialDay_1.0', 'Month_Aug', 'Month_Dec', 'Month_Feb',
-       'Month_Jul', 'Month_June', 'Month_Mar', 'Month_May', 'Month_Nov',
-       'Month_Oct', 'Month_Sep', 'Weekend_False', 'Weekend_True'} else False for x in df2.columns]
-
-
-# In[49]:
-
-
-df2.shape
-
-
-# In[50]:
-
-
-distancia_gower = gower_matrix(df2, cat_features=vars_cat)
-
-
-# In[51]:
-
-
-gdv = squareform(distancia_gower,force='tovector')
-
-
-# In[52]:
-
-
-gdv.shape
-
-
-# In[53]:
-
-
-Z = linkage(gdv, method='complete')
-
-
-# In[54]:
-
-
-df2['grupos_3'] = fcluster(Z, 3, criterion='maxclust')
-df2.grupos_3.value_counts()
-
-
-# In[55]:
-
-
-df3 = df.join(df2['grupos_3'], how='left')
-
-
-# In[56]:
-
-
-df3['grupos_3'].replace({1:"grupo_1", 3:"grupo_3", 2:"grupo_2"}, inplace=True)
-
-
-# In[57]:
-
-
-sns.boxplot(data=df3, y='grupos_3', x='BounceRates')
-
-
-# In[58]:
-
-
-pd.crosstab(df3.Revenue, df3.grupos_3)
-
-
-# In[59]:
-
-
-df2['grupos_4'] = fcluster(Z, 4, criterion='maxclust')
-df2.grupos_4.value_counts()
-
-
-# In[60]:
-
-
-df3 = df.join(df2['grupos_4'], how='left')
-df3['grupos_4'].replace({1:"grupo_1", 3:"grupo_3", 2:"grupo_2", 4:"grupo_4"}, inplace=True)
-
-
-# In[61]:
-
-
-sns.boxplot(data=df3, y='grupos_4', x='BounceRates')
-
-
-# In[62]:
-
-
-pd.crosstab(df3.Revenue, df3.grupos_4)
-
-
-# ## Avaliação dos grupos
-# 
-# Construa os agrupamentos com a técnica adequada que vimos em aula. Não se esqueça de tratar variáveis qualitativas, padronizar escalas das quantitativas, tratar valores faltantes e utilizar a distância correta.
-# 
-# Faça uma análise descritiva para pelo menos duas soluções de agrupamentos (duas quantidades diferentes de grupos) sugeridas no item anterior, utilizando as variáveis que estão no escopo do agrupamento.
-# - Com base nesta análise e nas análises anteriores, decida pelo agrupamento final. 
-# - Se puder, sugira nomes para os grupos.
-
-# In[63]:
-
-
-df2['grupos_6'] = fcluster(Z, 6, criterion='maxclust')
-df2.grupos_6.value_counts()
-
-
-# In[64]:
-
-
-df3 = df.join(df2['grupos_6'], how='left')
-df3['grupos_6'].replace({1:"grupo_1", 3:"grupo_3", 2:"grupo_2", 4:"grupo_4", 5:"grupo_5", 6:"grupo_6"}, inplace=True)
-
-
-# In[65]:
-
-
-sns.boxplot(data=df3, y='grupos_6', x='BounceRates')
-
-
-# In[66]:
-
-
-df2['grupos_2'] = fcluster(Z, 2, criterion='maxclust')
-df2.grupos_2.value_counts()
-
-
-# In[67]:
-
-
-df3 = df.join(df2['grupos_2'], how='left')
-df3['grupos_2'].replace({1:"grupo_1", 2:"grupo_2"}, inplace=True)
-
-
-# In[68]:
-
-
-sns.boxplot(data=df3, y='grupos_2', x='BounceRates')
-
-
-# In[69]:
-
-
-pd.crosstab(df3.Revenue, df3.grupos_2)
-
-
-# In[70]:
-
-
-df2['grupos_3'] = fcluster(Z, 3, criterion='maxclust')
-df3 = df.join(df2['grupos_3'], how='left')
-df3['grupos_3'].replace({1:"grupo_1", 3:"grupo_3", 2:"grupo_2"}, inplace=True)
-
-
-# In[71]:
-
-
-pd.crosstab(df3.Revenue, df3.grupos_3, normalize='columns')
-
-
-# In[72]:
-
-
-sns.pairplot(df2[['Administrative', 'Administrative_Duration', 'Informational', 
-             'Informational_Duration', 'ProductRelated', 'ProductRelated_Duration', 'grupos_3']], hue='grupos_3')
-
-
-# Analisando os resultados aparentemente 3 grupos é um número bom, ao aumentarmos o número de grupos o algoritmo cria grupos muito pequenos que não influenciam muito em decisões, muito provavelmente agrupando outliers. Escolhendo o melhor agrupamento como sendo o de 3 grupos analisaremos mais profundamente o mesmo.
-
-# In[73]:
-
-
-fig, axis = plt.subplots(3, 1, figsize=(15,15))
-
-sns.countplot(data=df3, x = "SpecialDay", hue='grupos_3', ax=axis[0])
-
-sns.countplot(data=df3, x = "Month", hue='grupos_3', ax=axis[1])
-
-sns.countplot(data=df3, x = "Weekend", hue='grupos_3', ax=axis[2])
-
-
-# - Observando o pairplot observamos que os grupos não foram separados por nenhuma das informações ali presentes, pois não percebemos nenhum padrão, na verdade o que parece ter maior peso é a variável Weekend, o que sugere que talvez a análise de 2 grupos apenas já seja útil, pois os grupos 2 e 3 parecem ser bem dificeis de se distinguir.
-
-# In[74]:
-
-
-df2['grupos_2'] = fcluster(Z, 2, criterion='maxclust')
-df3 = df.join(df2['grupos_2'], how='left')
-df3['grupos_2'].replace({1:"grupo_1", 2:"grupo_2"}, inplace=True)
-
-
-# In[75]:
-
-
-pd.crosstab(df3.Revenue, df3.grupos_2, normalize='columns')
-
-
-# In[76]:
-
-
-
-fig, axis = plt.subplots(3, 1, figsize=(15,15))
-
-sns.countplot(data=df3, x = "SpecialDay", hue='grupos_2', ax=axis[0])
-
-sns.countplot(data=df3, x = "Month", hue='grupos_2', ax=axis[1])
-
-sns.countplot(data=df3, x = "Weekend", hue='grupos_2', ax=axis[2])
-
-
-# In[ ]:
-
-
-
-
-
-# ## Avaliação de resultados
-# 
-# Avalie os grupos obtidos com relação às variáveis fora do escopo da análise (minimamente *bounce rate* e *revenue*). 
-# - Qual grupo possui clientes mais propensos à compra?
-
-# - Na análise de 2 grupos o grupo mais propenso a compra é o grupo_1 (maior porcentagem de Revenue = True e menores valores de Bounce Rate) que indica clientes que acessaram páginas aos finais de semana. (Na análise de 3 grupos chegamos a uma conclusão semelhante, o grupo de clientes que acessaram páginas aos finais de semana são mais propensos a compra).
-
-# In[ ]:
 
 
 
